@@ -23,7 +23,7 @@ DOCUMENTATION = '''
 module: firewalld
 short_description: Manage arbitrary ports/services with firewalld
 description:
-  - This module allows for addition or deletion of services and ports either tcp or udp in either running or permanent firewalld rules.
+  - This module allows for addition or deletion of services and ports either tcp or udp in either running or permanent firewalld rules and defaults.
 version_added: "1.4"
 options:
   service:
@@ -73,7 +73,12 @@ options:
       - "The amount of time the rule should be in effect for when non-permanent."
     required: false
     default: 0
+  default_zone:
+    version_added: 1.9
+    description:
+      - "Default firewall zone. All other options have to be left un-specified."
 notes:
+  - All arguments except default_zone have to be used in combination with permanent and state parameters
   - Not tested on any Debian based system.
 requirements: [ 'firewalld >= 0.2.11' ]
 author: "Adam Miller (@maxamillion)" 
@@ -242,6 +247,7 @@ def main():
             permanent=dict(type='bool',required=False,default=None),
             state=dict(choices=['enabled', 'disabled'], required=True),
             timeout=dict(type='int',required=False,default=0),
+            default_zone=dict(required=False,default=None),
         ),
         supports_check_mode=True
     )
@@ -274,6 +280,11 @@ def main():
     else:
         zone = fw.getDefaultZone()
 
+    if module.params['default_zone'] != None:
+        default_zone = module.params['default_zone']
+    else:
+        default_zone = None
+
     permanent = module.params['permanent']
     desired_state = module.params['state']
     immediate = module.params['immediate']
@@ -294,9 +305,16 @@ def main():
         modification_count += 1
     if rich_rule != None:
         modification_count += 1
+    if default_zone != None:
+        modification_count += 1
 
     if modification_count > 1:
-        module.fail_json(msg='can only operate on port, service or rich_rule at once')
+        module.fail_json(msg='can only operate on port, service, rich_rule ' \
+                 'or default_zone at once')
+
+    if bool(default_zone) == bool(desired_state) or bool(permanent):
+        module.fail_json(msg='either default_zone or (state, permanent) ' \
+                 'options are mandatory')
 
     if service != None:
         if permanent:
@@ -440,6 +458,14 @@ def main():
 
         if changed == True:
             msgs.append("Changed rich_rule %s to %s" % (rich_rule, desired_state))
+
+    if default_zone != None:
+        if fw.getDefaultZone() != default_zone:
+            if module.check_mode:
+                module.exit_json(changed=True)
+            fw.setDefaultZone(default_zone)
+            changed=True
+            msgs.append("Changed default zone to %s" % default_zone)
 
     module.exit_json(changed=changed, msg=', '.join(msgs))
 
