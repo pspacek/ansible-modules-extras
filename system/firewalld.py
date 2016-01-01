@@ -23,7 +23,7 @@ DOCUMENTATION = '''
 module: firewalld
 short_description: Manage arbitrary ports/services with firewalld
 description:
-  - This module allows for addition or deletion of services and ports either tcp or udp in either running or permanent firewalld rules.
+  - This module allows for addition or deletion of services and ports either tcp or udp in either running or permanent firewalld rules and defaults.
 version_added: "1.4"
 options:
   service:
@@ -73,7 +73,7 @@ options:
   state:
     description:
       - "Should this port accept(enabled) or reject(disabled) connections."
-    required: true
+    required: false
     choices: [ "enabled", "disabled" ]
   timeout:
     description:
@@ -86,9 +86,14 @@ options:
     required: false
     default: null
     version_added: "2.1"
+  default_zone:
+    description:
+      - "Default firewall zone. Changes can be only permanent and immediate."
+    version_added: "2.2"
 notes:
+  - All arguments except default_zone have to be used in combination with permanent and state parameters
   - Not tested on any Debian based system.
-  - Requires the python2 bindings of firewalld, which may not be installed by default if the distribution switched to python 3
+  - Requires the python2 bindings of firewalld, which may not be installed by default if the distribution switched to python 3 
 requirements: [ 'firewalld >= 0.2.11' ]
 author: "Adam Miller (@maxamillion)"
 '''
@@ -372,10 +377,11 @@ def main():
             immediate=dict(type='bool',default=False),
             source=dict(required=False,default=None),
             permanent=dict(type='bool',required=False,default=None),
-            state=dict(choices=['enabled', 'disabled'], required=True),
+            state=dict(choices=['enabled', 'disabled'], required=False),
             timeout=dict(type='int',required=False,default=0),
             interface=dict(required=False,default=None),
             masquerade=dict(required=False,default=None),
+            default_zone=dict(required=False, default=None),
         ),
         supports_check_mode=True
     )
@@ -469,6 +475,7 @@ def main():
         else:
             zone = fw.getDefaultZone()
 
+    default_zone = module.params['default_zone']
     permanent = module.params['permanent']
     desired_state = module.params['state']
     immediate = module.params['immediate']
@@ -487,9 +494,20 @@ def main():
         modification_count += 1
     if masquerade != None:
         modification_count += 1
+    if default_zone:
+        modification_count += 1
 
     if modification_count > 1:
-        module.fail_json(msg='can only operate on port, service, rich_rule or interface at once')
+        module.fail_json(msg='can only operate on port, service, rich_rule, '
+                         'interface or default_zone at once')
+
+    if (default_zone is None) == (desired_state is None):
+        module.fail_json(msg='mandatory options are either (default_zone, '
+                         'permanent, immediate) or (state, permanent)')
+
+    if default_zone and (not permanent or not immediate):
+        module.fail_json(msg='default_zone can be used only with options '
+                         'permanent and immediate set to True')
 
     if service != None:
         if permanent:
@@ -720,6 +738,14 @@ def main():
 
     if fw_offline:
         msgs.append("(offline operation: only on-disk configs were altered)")
+    if default_zone:
+        if fw.getDefaultZone() != default_zone:
+            if module.check_mode:
+                module.exit_json(changed=True)
+            fw.setDefaultZone(default_zone)
+            changed = True
+            msgs.append("Changed default zone to %s" % default_zone)
+
     module.exit_json(changed=changed, msg=', '.join(msgs))
 
 
